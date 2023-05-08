@@ -4,8 +4,12 @@ import pandas as pd
 import httplib2 
 from googleapiclient import discovery
 from oauth2client.service_account import ServiceAccountCredentials
+from gspread_dataframe import set_with_dataframe
+from google.oauth2.service_account import Credentials
+from pydrive.auth import GoogleAuth
+from pydrive.drive import GoogleDrive
+import gspread
 import time
-import pandas as pd
 import numpy as np
 
 
@@ -17,9 +21,15 @@ openai.Model.list()
 
 # Авторизация в Google
 CREDENTIALS_FILE = 'banded-cable-385612-0ca06f32ab93.json'  # Имя файла с закрытым ключом, вы должны подставить свое
-credentials = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'])
-httpAuth = credentials.authorize(httplib2.Http()) # Авторизуемся в системе
+scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+credentials = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+gc = gspread.authorize(credentials)
+gauth = GoogleAuth()
+drive = GoogleDrive(gauth)
 
+gs = gc.open_by_url('https://docs.google.com/spreadsheets/d/10xVeqL_8uewOhVvP2SWibbfj7VhAFVjBF-1STVcc_6c/edit#gid=0')
+# select a work sheet from its name
+worksheet1 = gs.add_worksheet(title='reviews', rows=30, cols=11)
 
 # Читаем запросы из файлов и делаем из них список
 def read_texts () -> list:
@@ -34,6 +44,27 @@ def read_texts () -> list:
       file.close()
   return reqs
 
+def write_to_history(answers:list) -> None:
+    history_paths= ['./GPTtoGoogle/history_shorts_male.txt', './GPTtoGoogle/history_shorts_female.txt', './GPTtoGoogle/history_medium_male.txt',
+           './GPTtoGoogle/history_medium_female.txt', './GPTtoGoogle/history_longlead_male.txt', './GPTtoGoogle/history_longlead_female.txt',
+           './GPTtoGoogle/history_poems_male.txt', './GPTtoGoogle/history_poems_female.txt', './GPTtoGoogle/history_army_male.txt', './GPTtoGoogle/history_army_female.txt']
+    for i in range(len(answers)):
+        file = open(history_paths[i],'a+', encoding='utf-8')
+        file.write('\n'.join(answers[i]))
+        file.close()
+    return None
+
+def read_from_history() -> list:
+    history_paths= ['./GPTtoGoogle/history_shorts_male.txt', './GPTtoGoogle/history_shorts_female.txt', './GPTtoGoogle/history_medium_male.txt',
+           './GPTtoGoogle/history_medium_female.txt', './GPTtoGoogle/history_longlead_male.txt', './GPTtoGoogle/history_longlead_female.txt',
+           './GPTtoGoogle/history_poems_male.txt', './GPTtoGoogle/history_poems_female.txt', './GPTtoGoogle/history_army_male.txt', './GPTtoGoogle/history_army_female.txt']
+    history = []
+    for path in history_paths:
+        file = open(path, 'r', encoding='utf-8')
+        history.append(file.read())
+    history = [x.strip() for x in history]
+    return history
+    
 
 def create_answers(reqs:list) -> list:
   def split_answer(answers:list) -> list:
@@ -55,12 +86,15 @@ def create_answers(reqs:list) -> list:
     return cleared_answers
 
   answers = []
-  for req in reqs:
-        print(req)
+  system_header = './GPTtoGoogle/text_system.txt'
+  history = read_from_history()
+  for i in range(len(reqs)):
+        print(reqs[i])
         result = []
         while len(result) == 0:
              try:
-                 completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": req}])
+                 completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "system", "content": system_header},
+                                                                                            {"role": "user", "content": reqs[i] + '\n'+ 'Отзыв не должен находиться в списке ниже:'+'\n'+ history[i]}])
                  result = completion.choices[0].message['content']
              except:
                   print('Error')
@@ -71,6 +105,7 @@ def create_answers(reqs:list) -> list:
   answers = list(map(map_func, answers))
   splited_answers = split_answer(answers)
   cleared_answers = clear_digits(splited_answers)
+  write_to_history(cleared_answers)
   return cleared_answers
 
 def create_table (answers:list) -> pd.DataFrame:
@@ -85,4 +120,9 @@ def create_table (answers:list) -> pd.DataFrame:
 reqs = read_texts()
 answers = create_answers(reqs)
 table = create_table(answers)
-table.to_csv('./GPTtoGoogle/reviews.csv')          
+table.to_csv('./GPTtoGoogle/reviews.csv')
+
+# write to dataframe
+worksheet1.clear()
+set_with_dataframe(worksheet=worksheet1, dataframe=table, include_index=True,
+include_column_header=True, resize=True)          
